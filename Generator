@@ -1,0 +1,116 @@
+#!/usr/bin/python3
+
+import pandas as pd
+import json
+#from bson import json_util
+from kafka import KafkaProducer
+import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta
+import time
+from random import seed
+from random import gauss
+
+#producer = KafkaProducer(bootstrap_servers='localhost:9092')
+
+source_files = ['Posts.xml', 'Comments.xml', 'Users.xml']
+path = f'/home/krzysztof/sparkFun/notebooks/3dprinting.meta.stackexchange.com/'
+df_input = [0, 0, 0]
+
+xml_keys = [['Id', 'CreationDate', 'ViewCount', 'Body', 'OwnerUserId', 'Title', 'Tags'],
+           ['Id', 'PostId', 'Score', 'Text', 'CreationDate', 'UserId', 'ContentLicense'],
+           ['Id', 'Reputation', 'CreationDate', 'DisplayName', 'LastAccessDate', 'Location', 'AboutMe', 'Views',
+           'UpVotes', 'DownVotes', 'AccountId']]
+
+for i, file in enumerate(source_files):
+    tree = ET.parse(path+file)
+    root = tree.getroot()
+    current_keys = xml_keys[i]
+    df_data = pd.DataFrame()
+    for row in root:
+        temp_dict = {}
+        for key in row.attrib:
+            if key in current_keys:
+                temp_dict[key] = row.attrib[key]
+        if len(temp_dict) > 0:
+            df_data = df_data.append(temp_dict, ignore_index=True)
+            df_input[i] = df_data
+
+df_posts = df_input[0]
+df_comments = df_input[1]
+df_users = df_input[2]
+
+df_posts['CreationDate'] = pd.to_datetime(df_posts['CreationDate'], format="%Y-%m-%dT%H:%M:%S")
+df_comments['CreationDate'] = pd.to_datetime(df_comments['CreationDate'], format="%Y-%m-%dT%H:%M:%S")
+df_users['CreationDate'] = pd.to_datetime(df_users['CreationDate'], format="%Y-%m-%dT%H:%M:%S")
+
+df_posts['Type'] = 1
+df_comments['Type'] = 2
+df_users['Type'] = 3
+
+posts_list = df_posts.loc[:,['CreationDate', 'Id', 'Type']]
+comments_list = df_comments.loc[:,['CreationDate', 'Id', 'Type']]
+users_list = df_users.loc[:,['CreationDate', 'Id', 'Type']]
+
+df_posts.set_index('Id', inplace=True)
+df_comments.set_index('Id', inplace=True)
+df_users.set_index('Id', inplace=True)
+
+generator_list = posts_list.append(comments_list).append(users_list)
+generator_list.sort_values(by='CreationDate', inplace=True)
+generator_list.reset_index(drop=True, inplace=True)
+
+out_file=[]
+
+n = 0.2
+seed(1)
+for i in range(20):
+    delay = abs(gauss(0, 2)) * n
+    time.sleep(delay)
+
+    ID = int(generator_list['Id'].iloc[i])
+    Type = generator_list['Type'].iloc[i]
+
+    if Type == 1:
+        output_data = df_posts.iloc[ID, :]
+    elif Type == 2:
+        output_data = df_comments.iloc[ID, :]
+    elif Type == 3:
+        output_data = df_users.iloc[ID + 1, :]
+    else:
+        output_data=pd.DataFrame()
+
+    output_data = output_data.to_json()
+    print(output_data)
+
+    producer = KafkaProducer(bootstrap_servers=['localhost:9092'],
+                             value_serializer=lambda m: json.dumps(m).encode('utf-8'))
+    producer.send('data', value=output_data)
+    print('sending to Kafka...')
+
+
+'''
+    if Type == 1:
+        post_data = df_posts.iloc[ID, :]
+        output_data = {"CreationDate" : str(post_data['CreationDate']),
+                         "ViewCounts" : post_data['ViewCount'],
+                         "Body" : post_data['Body'],
+                         "OwnerUserId" : post_data['OwnerUserId'],
+                         "Title" : post_data["Title"],
+                         "Type" : post_data['Type']
+                         }
+    elif Type == 2:
+        output_data = df_comments.iloc[ID, :]
+    elif Type == 3:
+        user_data = df_users.iloc[ID + 1, :]
+        output_data = {"CreationDate": str(user_data['CreationDate']),
+                       "AccountId": user_data['AccountId'],
+                       "DisplayName" : user_data['DisplayName'],
+                       "Reputation" : user_data['Reputation'],
+                       "AboutMe": user_data['AboutMe'],
+                       "Type" : user_data['Type']
+                       }
+    else:
+        output_data={}
+'''
+
+
