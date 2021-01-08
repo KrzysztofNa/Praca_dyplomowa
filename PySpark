@@ -1,0 +1,102 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import *
+from pyspark.sql.types import *
+import numpy as np
+from ast import literal_eval
+import os
+
+os.environ['PYSPARK_SUBMIT_ARGS'] = '--packages "org.apache.spark:spark-sql-kafka-0-10_2.11:2.4.7" pyspark-shell'
+
+kafka_servers = 'localhost:9092'
+appName = "3dprinting"
+master = "local"
+
+jsonSchema_post = StructType([StructField("postid", StringType(), True),
+                              StructField("Body", StringType(), True),
+                              StructField("CreationDate", StringType(), True),
+                              StructField("OwnerUserId", StringType(), True),
+                              StructField("Tags", StringType(), True),
+                              StructField("Title", StringType(), True),
+                              StructField("ViewCount", StringType(), True),
+                              StructField("Type", StringType(), True)])
+
+jsonSchema_answer = StructType([StructField("commentid", StringType(), True),
+                                StructField("ContentLicense", StringType(), True),
+                                StructField("CreationDate", StringType(), True),
+                                StructField("PostId", StringType(), True),
+                                StructField("Score", StringType(), True),
+                                StructField("Text", StringType(), True),
+                                StructField("UserId", StringType(), True),
+                                StructField("Type", StringType(), True)])
+
+jsonSchema_user = StructType([StructField("AccountId", StringType(), True),
+                              StructField("AboutMe", StringType(), True),
+                              StructField("CreationDate", StringType(), True),
+                              StructField("DisplayName", StringType(), True),
+                              StructField("DownVotes", StringType(), True),
+                              StructField("LastAccessDate", StringType(), True),
+                              StructField("Location", StringType(), True),
+                              StructField("Reputation", StringType(), True),
+                              StructField("UpVotes", StringType(), True),
+                              StructField("Views", StringType(), True),
+                              StructField("Type", StringType(), True)])
+
+                                                   
+spark = SparkSession.builder \
+    .master(master) \
+    .getOrCreate()
+
+stream = spark \
+    .readStream \
+    .format("kafka") \
+    .option("kafka.bootstrap.servers", kafka_servers) \
+    .option("subscribe", "post, answer, user") \
+    .option("startingOffsets", "earliest") \
+    .load()
+
+data = stream.selectExpr("CAST(value AS STRING)", "topic")
+
+data_post = data.filter(col('topic').isin(['post']))
+data_answer = data.filter(col('topic').isin(['answer']))
+data_user = data.filter(col('topic').isin(['user']))
+
+data_post1 = data_post.withColumn("value", from_json("value", jsonSchema_post)).select(col('value.*'))
+data_answer1 = data_answer.withColumn("value", from_json("value", jsonSchema_answer)).select(col('value.*'))
+data_users1 = data_user.withColumn("value", from_json("value", jsonSchema_user)).select(col('value.*'))
+
+post = data_post1.select('postid', 'CreationDate', 'OwnerUserId', 'ViewCount', 'Body')
+answer = data_answer1.select('PostId', 'CreationDate','commentid', 'UserId', 'Text')
+users = data_users1.select('AccountId', 'DisplayName', 'AboutMe', 'CreationDate', 'DownVotes', 'UpVotes', 'Reputation')
+
+post_text = data_post1.select('Body')
+answer_text = data_answer1.select('Text')
+
+word_list = ['abs', 'pla', 'nylon', 'petg', 'ramps', 'sunbeam', 'sanguinololu', 'slic3r', 'pronterface', 'cura']
+
+for word in word_list:
+    answer_tech = answer.withColumn('Technology', regexp_extract('Text', r'\b(?i)(' + word + r')\b' , 0))
+    post_tech = post.withColumn('Technology', regexp_extract('Body', r'\b(?i)(' + word + r')\b' , 0))
+    answer_tech = answer_tech.filter(~col('Technology').isin(['']))
+    post_tech = post_tech.filter(~col('Technology').isin(['']))
+    answer_tech = answer_tech.selectExpr("Technology", "CreationDate", "PostId", "commentid as AnswerId", "UserId")
+    post_tech = post_tech.withColumn("AnswerId", lit("0"))
+    post_tech = post_tech.selectExpr("Technology", "CreationDate", "postid as PostId", "AnswerId", "OwnerUserId as UserId")
+
+
+    write_stream = answer_tech \
+        .writeStream \
+        .trigger(processingTime='5 seconds') \
+        .outputMode("update") \
+        .option("truncate", "false") \
+        .format("console") \
+        .start()
+
+    write_stream = post_tech \
+        .writeStream \
+        .trigger(processingTime='5 seconds') \
+        .outputMode("update") \
+        .option("truncate", "false") \
+        .format("console") \
+        .start()
+                              
+write_stream.awaitTermination()
