@@ -1,0 +1,98 @@
+#!/usr/bin/python3
+
+import cassandra
+from cassandra.cluster import Cluster
+from cassandra.query import SimpleStatement
+from cassandra import ConsistencyLevel
+import pandas as pd
+import plotly.graph_objects as go
+import dash
+import dash_core_components as dcc
+import dash_html_components as html
+from dash.dependencies import Input, Output
+import numpy as np
+
+external_stylesheets = ['http://codepen.io/chriddyp/pen/bWLwgP.css']
+cluster = Cluster(["127.0.0.1"])   # tylko jednen węzeł użyty w pracy
+session = cluster.connect()
+session.set_keyspace("printers")
+
+# wyszukiwanie wystąpień technologii w miesiącu z tabeli technology
+input_data = pd.DataFrame(session.execute("select technology, date, count(technology) from technology " 
+                                          "group by technology, date"))
+df = input_data.sort_values(by='date')
+df['date'] = pd.to_datetime(df['date'].apply(lambda x: str(x)[:4]+"-"+str(x)[4:]+'-01'))
+
+# pobieranie numerów postów i odpowiedzi
+input_arch = pd.DataFrame(session.execute('select postid, answerid, creationdate from archive'))
+arch = pd.DataFrame(input_arch).set_index('creationdate')
+arch['answer_count'] = np.where(arch['answerid']==0, 0, 1)
+arch['post_count'] = np.where(arch['answerid']==0, 1, 0)
+arch_fin = arch.groupby(by=[arch.index.year, arch.index.month]).sum()
+
+end_date = '2019-10-01' # data końca danych, normalnie powinna być obecna
+date_range = pd.date_range(start='2016-01-01', end=df['date'].max(), freq='MS')
+date_range = pd.DataFrame(date_range, columns=['months'] )
+
+app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
+app.layout = html.Div([
+
+    html.H2(children='Technologie i materiały w druku 3D',
+            style = {'margin-bottom': '10px', 'color': 'blask'}),
+    html.H4(children='Aktywność na forum w danym miesiącu (posty i odpowiedzi):',
+            style = {'margin-bottom': '20px', 'color': 'black'}),
+    dcc.Graph(
+        figure=go.Figure(
+            data=[
+                go.Scatter(
+                    x=date_range['months'],
+                    y=arch_fin['answer_count'],
+                    mode='lines',
+                    fill='tozeroy',
+                    name='Aktywność'
+                )
+            ],
+            layout=go.Layout(
+                showlegend=False
+            )
+        )
+    ),
+    html.H4(children='Ilość wystąpień danej technologii w miesiącu:',
+            style = {'margin-bottom': '20px', 'color': 'black'}),
+    dcc.Dropdown(id = 'select_tech',
+                 multi = False,
+                 options = [{'label':i, 'value':i} for i in list(df['technology'].drop_duplicates())],
+                 className = 'dcc_compon'),
+    dcc.Graph(id='bar_chart',
+              config = {'displayModeBar':'hover'},
+              animate=True
+              )
+])
+
+@app.callback(
+    Output('bar_chart', 'figure'),
+    [Input('select_tech', 'value')]
+)
+def update_graph(select_tech):
+    current_tech = df[df['technology'] == str(select_tech)].drop('technology', axis=1).set_index('date')
+    current_tech_dates = date_range.join(current_tech, on='months').fillna(0)
+
+    x_time = current_tech_dates['months']
+    y_tech = list(current_tech_dates['system_count_technology'])
+
+    return {
+        'data':[go.Bar(
+            x=x_time,
+            y=y_tech,
+            text = 'Ilość wystąpień {}'. format(str(select_tech)),
+            marker = dict(color = 'green', showscale=False),
+        )],
+        'layout': go.Layout(
+            plot_bgcolor='#F2F2F2',
+            paper_bgcolor='#F2F2F2',
+            hovermode = 'x'
+        )
+    }
+
+if __name__ == '__main__':
+    app.run_server(debug=True)
