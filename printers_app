@@ -13,7 +13,7 @@ from dash.dependencies import Input, Output
 import numpy as np
 
 external_stylesheets = ['http://codepen.io/chriddyp/pen/bWLwgP.css']
-cluster = Cluster(["127.0.0.1"])   # tylko jednen węzeł użyty w pracy
+cluster = Cluster(["127.0.0.1"])   # wkleić adres Cassandry, tylko jednen węzeł użyty w pracy
 session = cluster.connect()
 session.set_keyspace("printers")
 
@@ -30,7 +30,6 @@ arch['answer_count'] = np.where(arch['answerid']==0, 0, 1)
 arch['post_count'] = np.where(arch['answerid']==0, 1, 0)
 arch_fin = arch.groupby(by=[arch.index.year, arch.index.month]).sum()
 
-end_date = '2019-10-01' # data końca danych, normalnie powinna być obecna
 date_range = pd.date_range(start='2016-01-01', end=df['date'].max(), freq='MS')
 date_range = pd.DataFrame(date_range, columns=['months'] )
 
@@ -41,7 +40,7 @@ app.layout = html.Div([
             style = {'margin-bottom': '10px', 'color': 'blask'}),
     html.H4(children='Aktywność na forum w danym miesiącu (posty i odpowiedzi):',
             style = {'margin-bottom': '20px', 'color': 'black'}),
-    dcc.Graph(
+    dcc.Graph(           # wykres aktywności forum
         figure=go.Figure(
             data=[
                 go.Scatter(
@@ -49,21 +48,35 @@ app.layout = html.Div([
                     y=arch_fin['answer_count'],
                     mode='lines',
                     fill='tozeroy',
-                    name='Aktywność'
+                    name='Ilość odpowiedzi'
+                ),
+                go.Scatter(
+                    x=date_range['months'],
+                    y=arch_fin['post_count'],
+                    mode='lines',
+                    fill='tozeroy',
+                    name='Iość postów'
                 )
             ],
             layout=go.Layout(
-                showlegend=False
+                showlegend=True,
+                font=dict(
+                        family="Courier New, monospace",
+                        size=18,
+                        color="RebeccaPurple" )
             )
         )
     ),
     html.H4(children='Ilość wystąpień danej technologii w miesiącu:',
             style = {'margin-bottom': '20px', 'color': 'black'}),
     dcc.Dropdown(id = 'select_tech',
+                 style={
+                     'font-size': "120%"
+                 },
                  multi = False,
                  options = [{'label':i, 'value':i} for i in list(df['technology'].drop_duplicates())],
                  className = 'dcc_compon'),
-    dcc.Graph(id='bar_chart',
+    dcc.Graph(id='bar_chart',     #wykres wystąpień wyrażeń
               config = {'displayModeBar':'hover'},
               animate=True
               )
@@ -90,9 +103,14 @@ def update_graph(select_tech):
         'layout': go.Layout(
             plot_bgcolor='#F2F2F2',
             paper_bgcolor='#F2F2F2',
-            hovermode = 'x'
+            hovermode = 'x',
+            font=dict(
+                family="Courier New, monospace",
+                size=18,
+                color="RebeccaPurple")
         )
     }
 
 if __name__ == '__main__':
     app.run_server(debug=True)
+
