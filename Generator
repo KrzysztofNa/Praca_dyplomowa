@@ -10,7 +10,7 @@ from kafka import KafkaProducer
 import numpy as np
 
 source_files = ['Posts.xml', 'Comments.xml', 'Users.xml']    # użyte pliki z dostarczonych danych
-path = f'~//'     # aktualna ścieżka plików źródłowych
+path = f''     # aktualna ścieżka plików źródłowych
 df_input = [0, 0, 0]
 
 xml_keys = [['Id', 'CreationDate', 'ViewCount', 'Body', 'OwnerUserId', 'Title', 'Tags'],
