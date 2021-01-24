@@ -1,12 +1,13 @@
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import *
 from pyspark.sql.types import *
-import re
+#import re
 
-kafka_servers = 'localhost:9092'
+kafka_servers = '172.31.75.133:9092'   # wkleić private IP servera Kafka
 appName = "3dprinting"
-master = "local"
+master = "local"    # jedna maszyna użyta w pracy
 
+# schematy .json dla odczytywanych danych
 jsonSchema_post = StructType([StructField("postid", StringType(), True),
                               StructField("Body", StringType(), True),
                               StructField("CreationDate", StringType(), True),
@@ -37,6 +38,31 @@ jsonSchema_user = StructType([StructField("AccountId", StringType(), True),
                               StructField("Views", StringType(), True),
                               StructField("Type", StringType(), True)])
 
+
+def writeToCassandraTech(writeDF, epochId):  # funkcja zapisująca batche do technology
+    writeDF.write \
+        .format("org.apache.spark.sql.cassandra") \
+        .options(table="technology", keyspace="printers") \
+        .mode("append") \
+        .save()
+
+
+def writeToCassandraUser(writeDF, epochId):  # funkcja zapisująca batche do users
+    writeDF.write \
+        .format("org.apache.spark.sql.cassandra") \
+        .options(table="users", keyspace="printers") \
+        .mode("append") \
+        .save()
+
+
+def writeToCassandraArch(writeDF, epochId):  # funkcja zapisująca batche do archive
+    writeDF.write \
+        .format("org.apache.spark.sql.cassandra") \
+        .options(table="archive", keyspace="printers") \
+        .mode("append") \
+        .save()
+    
+# budowanie sesji
 spark = SparkSession.builder \
     .master(master) \
     .getOrCreate()
@@ -62,77 +88,59 @@ data_users1 = data_user.withColumn("value", from_json("value", jsonSchema_user))
 post = data_post1.select('postid', 'CreationDate', 'OwnerUserId', 'ViewCount', 'Body')
 answer = data_answer1.select('PostId', 'CreationDate','commentid', 'UserId', 'Text')
 
-users = data_users1.select(data_users1.AccountId.cast('int').alias('accountid'), 
+users = data_users1.select(data_users1.AccountId.cast('int').alias('accountid'),
                                      data_users1.DisplayName.cast('string').alias('name'),
                                      data_users1.AboutMe.cast('string').alias('aboutme'),
                                      data_users1.CreationDate.cast('timestamp').alias('creationdate'),
-                                     data_users1.DownVotes.cast('int').alias('downvotes'), 
+                                     data_users1.DownVotes.cast('int').alias('downvotes'),
                                      data_users1.UpVotes.cast('int').alias('upvotes'),
                                      data_users1.Reputation.cast('int').alias('reputation'))
 
-post_with_ansid = post.withColumn("answerid", lit("0"))   
+post_with_ansid = post.withColumn("answerid", lit("0"))
 
-post_output = post_with_ansid.select(post_with_ansid.postid.cast('int'), 
+post_output = post_with_ansid.select(post_with_ansid.postid.cast('int'),
                                      post_with_ansid.CreationDate.cast('timestamp').alias('creationdate'),
                                      post_with_ansid.answerid.cast('int'),
                                      post_with_ansid.OwnerUserId.cast('int').alias('userid'),
                                      post_with_ansid.Body.cast('string').alias('text'))
 
-answer_output = answer.select(answer.PostId.cast('int').alias('postid'), 
+answer_output = answer.select(answer.PostId.cast('int').alias('postid'),
                                      answer.CreationDate.cast('timestamp').alias('creationdate'),
                                      answer.commentid.cast('int').alias('answerid'),
                                      answer.UserId.cast('int').alias('userid'),
                                      answer.Text.cast('string').alias('text'))
 
-def writeToCassandraTech(writeDF, epochId):
-     writeDF.write \
-        .format("org.apache.spark.sql.cassandra") \
-        .options(table="technology", keyspace="printers")\
-        .mode("append") \
-        .save()
 
-def writeToCassandraUser(writeDF, epochId):
-     writeDF.write \
-        .format("org.apache.spark.sql.cassandra") \
-        .options(table="users", keyspace="printers")\
-        .mode("append") \
-        .save()
-
-def writeToCassandraArch(writeDF, epochId):
-     writeDF.write \
-        .format("org.apache.spark.sql.cassandra") \
-        .options(table="archive", keyspace="printers")\
-        .mode("append") \
-        .save()
-
-word_list = ['abs', 'pla', 'nylon', 'petg', 'ramps', 'sunbeam', 'sanguinololu', 'arduino', 'slic3r', 
+# wyszukiwane wyrażenia:
+word_list = ['abs', 'pla', 'nylon', 'petg', 'ramps', 'sunbeam', 'sanguinololu', 'arduino', 'slic3r',
              'pronterface', 'cura']
 
 post_tech = post.withColumn('Body', explode(split(post.Body, " "))) \
-                    .withColumn('Body', lower(col('Body'))) 
+                    .withColumn('Body', lower(col('Body')))
 post_tech = post_tech.withColumn('Body',regexp_replace(post_tech['Body'],"[^0-9a-zA-Z$]+","")) \
                          .filter(post_tech.Body.isin(word_list))
-post_tech = post_tech.select(post_tech.postid.cast('int'), 
-                             post_tech.Body.cast('string').alias('technology'), 
-                             post_tech.CreationDate.cast('date').alias('date'), 
+post_tech = post_tech.select(post_tech.postid.cast('int'),
+                             post_tech.Body.cast('string').alias('technology'),
+                             post_tech.CreationDate.cast('date').alias('date'),
                              post_tech.OwnerUserId.cast('int').alias('userid'))
 
 post_tech = post_tech.withColumn("answerid", lit("0"))
 post_tech = post_tech.withColumn('date', date_format('date', 'yyyyMM'))
 
-
 answer_tech = answer.withColumn('Text', explode(split(answer.Text, " "))) \
-                    .withColumn('Text', lower(col('Text'))) 
+                    .withColumn('Text', lower(col('Text')))
 answer_tech = answer_tech.withColumn('Text',regexp_replace(answer_tech['Text'],"[^0-9a-zA-Z$]+","")) \
                          .filter(answer_tech.Text.isin(word_list))
-answer_tech = answer_tech.select(answer_tech.PostId.cast('int').alias('postid'), 
-                                 answer_tech.commentid.cast('int').alias('answerid'), 
-                                 answer_tech.Text.cast('string').alias('technology'), 
-                                 answer_tech.CreationDate.cast('date').alias('date'), 
+answer_tech = answer_tech.select(answer_tech.PostId.cast('int').alias('postid'),
+                                 answer_tech.commentid.cast('int').alias('answerid'),
+                                 answer_tech.Text.cast('string').alias('technology'),
+                                 answer_tech.CreationDate.cast('date').alias('date'),
                                  answer_tech.UserId.cast('int').alias('userid'))
 
 answer_tech = answer_tech.withColumn('date', date_format('date', 'yyyyMM'))
-'''
+
+# tylko do celów testowych
+''' # 
 query = answer_tech \
     .writeStream \
     .trigger(processingTime='5 seconds') \
@@ -148,6 +156,7 @@ query = answer_tech \
     .foreachBatch(writeToCassandraTech) \
     .start()
 
+# tylko do celów testowych
 '''
 query = post_tech \
     .writeStream \
@@ -163,6 +172,8 @@ query = post_tech \
     .outputMode("update") \
     .foreachBatch(writeToCassandraTech) \
     .start()
+
+# tylko do celów testowych
 '''
 query = users \
     .writeStream \
@@ -178,6 +189,8 @@ query = users \
     .outputMode("update") \
     .foreachBatch(writeToCassandraUser) \
     .start()
+
+# tylko do celów testowych
 '''
 query = post_output \
     .writeStream \
@@ -195,6 +208,7 @@ query = post_output \
     .foreachBatch(writeToCassandraArch) \
     .start()
 
+# tylko do celów testowych
 '''
 query = answer_output \
     .writeStream \
@@ -212,5 +226,4 @@ query = answer_output \
     .foreachBatch(writeToCassandraArch) \
     .start()
 
-#spark.streams.awaitAnyTermination()
 query.awaitTermination()
